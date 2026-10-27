@@ -5,12 +5,6 @@ import Footer from "@/components/Footer";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
-const OVERPASS_ENDPOINTS = [
-  "https://overpass.kumi.systems/api/interpreter",
-  "https://overpass.private.coffee/api/interpreter",
-  "https://overpass-api.de/api/interpreter",
-];
-
 type Hospital = {
   id: number;
   lat: number;
@@ -30,37 +24,15 @@ const Doctors = () => {
 
     setLoading(true);
 
-    const query = `
-      [out:json][timeout:20];
-      nwr["amenity"="hospital"](around:5000,${lat},${lon});
-      out center;
-    `;
-
-    // teeno mirrors ko ek saath race karao, jo pehle jawab de wahi use hoga
-    const controllers = OVERPASS_ENDPOINTS.map(() => new AbortController());
-    const timer = setTimeout(() => controllers.forEach((c) => c.abort()), 15000);
-
     let data: any = null;
     try {
-      data = await Promise.any(
-        OVERPASS_ENDPOINTS.map(async (url, i) => {
-          const response = await fetch(url, {
-            method: "POST",
-            body: "data=" + encodeURIComponent(query),
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            signal: controllers[i].signal,
-          });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const json = await response.json();
-          // winner mil gaya, baaki requests cancel
-          controllers.forEach((c, j) => j !== i && c.abort());
-          return json;
-        })
+      const response = await fetch(
+        `/.netlify/functions/hospitals?lat=${lat}&lon=${lon}`
       );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      data = await response.json();
     } catch (error) {
-      console.warn("All Overpass mirrors failed", error);
-    } finally {
-      clearTimeout(timer);
+      console.warn("Hospitals fetch failed", error);
     }
 
     if (data) {
