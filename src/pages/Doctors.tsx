@@ -5,32 +5,79 @@ import Footer from "@/components/Footer";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
+const OVERPASS_ENDPOINTS = [
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+];
+
+type Hospital = {
+  id: number;
+  lat: number;
+  lon: number;
+  tags?: { name?: string };
+};
+
 const Doctors = () => {
-  const [nearbyDoctors, setNearbyDoctors] = useState([]);
+  const [nearbyDoctors, setNearbyDoctors] = useState<Hospital[]>([]);
   const [loading, setLoading] = useState(false);
 
   // ================================
   // Fetch hospitals around user
   // ================================
-  const fetchNearbyDoctors = async (lat, lon) => {
+  const fetchNearbyDoctors = async (lat: number, lon: number) => {
     if (!lat || !lon) return;
 
     setLoading(true);
+
+    const query = `
+      [out:json][timeout:20];
+      nwr["amenity"="hospital"](around:5000,${lat},${lon});
+      out center;
+    `;
+
+    // teeno mirrors ko ek saath race karao, jo pehle jawab de wahi use hoga
+    const controllers = OVERPASS_ENDPOINTS.map(() => new AbortController());
+    const timer = setTimeout(() => controllers.forEach((c) => c.abort()), 15000);
+
+    let data: any = null;
     try {
-      const response = await fetch(
-        `https://overpass-api.de/api/interpreter?data=[out:json];node["amenity"="hospital"](around:5000,${lat},${lon});out;`
+      data = await Promise.any(
+        OVERPASS_ENDPOINTS.map(async (url, i) => {
+          const response = await fetch(url, {
+            method: "POST",
+            body: "data=" + encodeURIComponent(query),
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            signal: controllers[i].signal,
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const json = await response.json();
+          // winner mil gaya, baaki requests cancel
+          controllers.forEach((c, j) => j !== i && c.abort());
+          return json;
+        })
       );
-
-      if (!response.ok) throw new Error("Network response was not ok");
-
-      const data = await response.json();
-      setNearbyDoctors(data.elements);
     } catch (error) {
-      console.error("Error fetching nearby hospitals:", error);
-      alert("Could not fetch nearby hospitals. Try again.");
+      console.warn("All Overpass mirrors failed", error);
     } finally {
-      setLoading(false);
+      clearTimeout(timer);
     }
+
+    if (data) {
+      // ways/relations me lat/lon `center` ke andar hota hai, normalize karo
+      const hospitals = data.elements
+        .map((el: any) => ({
+          ...el,
+          lat: el.lat ?? el.center?.lat,
+          lon: el.lon ?? el.center?.lon,
+        }))
+        .filter((el: any) => el.lat && el.lon);
+      setNearbyDoctors(hospitals);
+    } else {
+      alert("Could not fetch nearby hospitals. Try again.");
+    }
+
+    setLoading(false);
   };
 
   // ================================
@@ -41,7 +88,7 @@ const Doctors = () => {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
-          fetchNearbyDoctors(latitude, longitude); // auto fetch
+          fetchNearbyDoctors(latitude, longitude);
         },
         () => {
           alert("Location permission denied. Please allow location access.");
@@ -55,7 +102,7 @@ const Doctors = () => {
   // ================================
   // OPEN LOCATION IN GOOGLE MAPS
   // ================================
-  const openLocation = (lat, lon) => {
+  const openLocation = (lat: number, lon: number) => {
     const url = `https://www.google.com/maps?q=${lat},${lon}`;
     window.open(url, "_blank");
   };
@@ -95,9 +142,11 @@ const Doctors = () => {
           {/* RESULTS */}
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 ">
             {nearbyDoctors.length > 0 ? (
-              nearbyDoctors.map((doctor, index) => (
-                <Card key={index} className="card-hover animate-fade-in bg-white
-    border-2 border-gray-300">
+              nearbyDoctors.map((doctor) => (
+                <Card
+                  key={doctor.id}
+                  className="card-hover animate-fade-in bg-white border-2 border-gray-300"
+                >
                   <CardContent className="p-6">
                     <h3 className="font-semibold text-lg">
                       {doctor.tags?.name || "Unnamed Hospital"}
@@ -107,7 +156,6 @@ const Doctors = () => {
                       Coordinates: {doctor.lat}, {doctor.lon}
                     </p>
 
-                    {/* ⭐ SEE LOCATION BUTTON ⭐ */}
                     <Button
                       className="mt-2"
                       onClick={() => openLocation(doctor.lat, doctor.lon)}
